@@ -1,0 +1,27 @@
+[project]
+name = "now-playing-properly"
+version = "0.1.0"
+description = "Now Playing metadata, done PROPERLY"
+readme = "README.md"
+authors = [
+    { name = "takingurstuff", email = "130810510+takingurstuff@users.noreply.github.com" },
+]
+requires-python = ">=3.13"
+dependencies = [
+    "httpx>=0.23.3",
+    "msgpack>=1.1.2",
+    "pydantic>=2.13.3",
+    "pydantic-settings>=2.14.2",
+    "pypresence>=4.6.1",
+    "rich>=15.0.0",
+    "sdbus>=0.14.2",
+    "systemd-python>=235",
+]
+
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+
+[project.scripts]
+my-app = "now_playing_properly.daemon.main:main"
