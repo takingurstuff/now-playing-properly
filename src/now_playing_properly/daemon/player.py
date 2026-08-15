@@ -5,7 +5,10 @@ from .log_manager import setup_logging
 from .queue_types import UpdateEvent, SeekEvent
 from ..common.metadata_spec import AudioMetadata
 from typing import Any, Dict, List, Literal, Optional, Union
-from .interface import MprisPlayerInterface, MprisRootInterface, DbusPropertiesInterface
+from ..common.interfaces import (
+    MediaPlayer2BaseInterface,
+    MediaPlayer2PlayerInterface,
+)
 
 logger = setup_logging()
 
@@ -14,14 +17,12 @@ class Player:
     def __init__(
         self,
         player_name: str,
-        mpris_player_interface: MprisPlayerInterface,
-        mpris_root_interface: MprisRootInterface,
-        dbus_properties_interface: DbusPropertiesInterface,
+        mpris_player_interface: MediaPlayer2PlayerInterface,
+        mpris_root_interface: MediaPlayer2BaseInterface,
         event_queue: asyncio.Queue[Union[UpdateEvent, SeekEvent]],
     ) -> None:
-        self.interface: MprisPlayerInterface = mpris_player_interface
+        self.interface = mpris_player_interface
         self.root_interface = mpris_root_interface
-        self.dbus_properties_interface = dbus_properties_interface
         self.name: str = player_name
         self.active: bool = True
         self.last_active: int = 0
@@ -113,7 +114,7 @@ class Player:
 
     async def on_seek(self, send_event=True) -> None:
         """Handler for the Seeked signal, the Seeked signal is not part of PropertiesChanged"""
-        self.elapsed_time = await self.interface.Position
+        self.elapsed_time = await self.interface.position
         self.start_time = time.time() * 1_000_000
 
         if send_event:
@@ -122,7 +123,7 @@ class Player:
             )
 
     async def seek_listener(self):
-        async for _ in self.interface.Seeked:
+        async for seeked_ms in self.interface.seeked:
             await self.on_seek()
 
     def _unpack_sdbus_variant(self, value: Any) -> Any:
@@ -199,7 +200,7 @@ class Player:
                 interface_name,
                 changed_properties,
                 invalidated_properties,
-            ) in self.dbus_properties_interface.PropertiesChanged:
+            ) in self.interface.properties_changed:
                 """Listener for the PropertiesChanged signal"""
                 changed_properties = {
                     k: self._unpack_sdbus_variant(v)
@@ -216,6 +217,10 @@ class Player:
                     logger.debug(f"[{self.name}] Metadata updated.")
                     await self.set_metadata(changed_properties["Metadata"])
                     await self.on_seek()
+
+                if "Rate" in changed_properties:
+                    logger.debug(f"[{self.name}] Rate Changed.")
+
         except asyncio.CancelledError:
             return
 
@@ -223,8 +228,13 @@ class Player:
         """CALL ON FIRST CONNECT ONLY
         Synchronizes the state with the actual player
         """
-        metadata = await self.interface.Metadata
-        status = await self.interface.PlaybackStatus
+        metadata = await self.interface.metadata
+        status = await self.interface.playback_status
+        volume = await self.interface.volume
+        shuffle = await self.interface.shuffle
+        minrate = await self.interface.minimum_rate
+        maxrate = await self.interface.maximum_rate
+        rate = await self.interface.rate
 
         match status:
             case "Playing":
@@ -246,6 +256,11 @@ class Player:
                 metadata,
                 self.start_time,
                 self.elapsed_time,
+                volume,
+                shuffle,
+                minrate,
+                maxrate,
+                rate,
                 random.randbytes(4),
             )
         )

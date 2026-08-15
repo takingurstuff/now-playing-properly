@@ -148,3 +148,12 @@ class Plugin:
                 f"Expected {expected_params_count} parameters, but found {actual_count} "
                 f"({', '.join(p.name for p in params)})."
             )
+
+
+@dataclass
+class UnixFD:
+    """
+    small helper class, when a plugin wants to return a unixfd in its custom data, wrap the file descriptor integer in this class so later marshalling can understand it
+    """
+
+    fd: int
