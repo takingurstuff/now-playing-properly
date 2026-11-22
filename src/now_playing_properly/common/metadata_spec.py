@@ -51,8 +51,8 @@ class AudioMetadata:
     first_use: Optional[str] = None
     last_use: Optional[str] = None
 
-    def to_mpris(
-        self, delimiter: str = " "
+    def to_dbus(
+        self, delimiter: str = ", "
     ) -> (
         dict
     ):  # That is a non breaking space, specifically chosen for its ability to look like a space (so things dont look rediculous) without being a space (you can split safely by nbsp and assume no sane human uses it in an album name)
@@ -84,16 +84,16 @@ class AudioMetadata:
         return {k: v for k, v in raw_map.items() if v is not None}
 
     @classmethod
-    def from_mpris(cls, data: dict) -> "AudioMetadata":
+    def from_dbus(cls, data: dict, delimiter: str = ", ") -> "AudioMetadata":
         """Deserializes directly from an MPRIS dictionary."""
-        album_val = data.get("xesam:album")
-        art_val = data.get("mpris:artUrl")
+        album_val: str = data.get("xesam:album")
+        art_val: str = data.get("mpris:artUrl")
 
         return cls(
             track_id=data.get("mpris:trackid"),
             duration=data.get("mpris:length"),
-            art_url=[art_val] if art_val else None,
-            album=[album_val] if album_val else None,
+            art_url=art_val.split(delimiter) if art_val else None,
+            album=album_val.split(delimiter) if album_val else None,
             title=data.get("xesam:title"),
             lyrics=data.get("xesam:asText"),
             url=data.get("xesam:url"),
@@ -113,3 +113,35 @@ class AudioMetadata:
             first_use=data.get("xesam:firstUsed"),
             last_use=data.get("xesam:lastUsed"),
         )
+
+
+@dataclass
+class PlayerProperties:
+    volume: Optional[float] = None
+    shuffle: Optional[bool] = None
+    loop_status: Optional[str] = None
+    minrate: Optional[float] = None
+    maxrate: Optional[float] = None
+    rate: Optional[float] = None
+
+    @classmethod
+    def from_dbus(cls, data: dict):
+        return cls(
+            volume=data.get("Volume"),
+            shuffle=data.get("Shuffle"),
+            loop_status=data.get("LoopStatus"),
+            minrate=data.get("MinimumrRate"),
+            maxrate=data.get("MaximumRate"),
+            rate=data.get("Rate"),
+        )
+
+    def to_dbus(self):
+        ret = {
+            "Volume": self.shuffle,
+            "Shuffle": self.shuffle,
+            "LoopStatus": self.loop_status,
+            "MinimumRate": self.minrate,
+            "MaximumRate": self.maxrate,
+            "Rate": self.rate,
+        }
+        return {k: v for k, v in ret.items() if v is not None}

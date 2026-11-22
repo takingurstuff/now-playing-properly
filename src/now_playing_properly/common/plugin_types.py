@@ -1,13 +1,34 @@
+import abc
+import asyncio
 import inspect
 from pydantic import BaseModel
 from dataclasses import dataclass
-from httpx import AsyncClient, Client
 from .metadata_spec import AudioMetadata, AudioMetadata
-from typing import Dict, Any, Callable, Awaitable, Union, Type, Optional
-
-
-class PluginState:
-    pass
+from typing import (
+    Any,
+    Dict,
+    Type,
+    Union,
+    Literal,
+    Callable,
+    Optional,
+    Awaitable,
+)
+from .communication_models import (
+    ReqType,
+    NetworkReq,
+    NetworkResp,
+    SeekRequest,
+    ConcExecReq,
+    ConcExecResp,
+    SubprocessReq,
+    ActionRequest,
+    SubprocessResp,
+    PluginReqTypes,
+    PluginRespTypes,
+    PluginEventTypes,
+)
+import random
 
 
 @dataclass
@@ -21,133 +42,116 @@ class BasePluginConfig(BaseModel):
     enabled: bool = True
 
 
-class BadDomainError(PermissionError):
-    pass
+@dataclass
+class Hook:
+    name: str
+    condition: Callable[[PluginEventTypes, BasePluginConfig], bool]
+    handler: Callable[
+        [PluginEventTypes, BasePluginConfig],
+        Optional[PluginResponse | Awaitable[PluginResponse]],
+    ]
 
 
 @dataclass
-class Resources:
-    network_async: AsyncClient
-    network_sync: Client
+class CoreComms:
+    q_in: asyncio.Queue[PluginRespTypes]
+    q_out: asyncio.Queue[PluginReqTypes]
 
 
-REQUIRED = ("name", "Config", "activation", "plugin_function")
-STATE = ("State", "create_state")
-NAME = __name__
+def hook(condition=None):
+    def dec(func):
+        func._is_hook = True
+        func._condition = condition
+        return func
+
+    return dec
 
 
-class Plugin:
-    name: str
-    State: Optional[Type[PluginState]]
-    create_state: Optional[Callable[[], PluginState]]
-    Config: Type[BasePluginConfig]
-    activation: Callable[[Optional[PluginState], BasePluginConfig, AudioMetadata], bool]
-    plugin_function: Callable[
-        [Optional[PluginState], BasePluginConfig, Resources, AudioMetadata],
-        Union[Awaitable[PluginResponse], PluginResponse],
-    ]
+class BasePluginContent(abc.ABC):
 
-    def __init__(
-        self,
-        name: str = None,
-        State: Optional[Type[PluginState]] = None,
-        create_state: Optional[Callable[[], PluginState]] = None,
-        Config: Type[BasePluginConfig] = None,
-        activation: Callable[
-            [Optional[PluginState], BasePluginConfig, AudioMetadata], bool
-        ] = None,
-        plugin_function: Callable[
-            [Optional[PluginState], BasePluginConfig, Resources, AudioMetadata],
-            Union[Awaitable[PluginResponse], PluginResponse],
-        ] = None,
-    ):
-        # Fallback to class-level attributes if not provided in __init__
-        self.name = name if name is not None else getattr(self, "name", None)
-        self.State = State if State is not None else getattr(self, "State", None)
-        self.create_state = (
-            create_state
-            if create_state is not None
-            else getattr(self, "create_state", None)
-        )
-        self.Config = Config if Config is not None else getattr(self, "Config", None)
-        self.activation = (
-            activation if activation is not None else getattr(self, "activation", None)
-        )
-        self.plugin_function = (
-            plugin_function
-            if plugin_function is not None
-            else getattr(self, "plugin_function", None)
-        )
-
-        # Deep strict validation
-        self._validate_attributes()
-
-    def _validate_attributes(self):
-        # 1. Validate strictly required properties exist
-        missing = [attr for attr in REQUIRED if getattr(self, attr, None) is None]
-        if missing:
-            raise TypeError(f"Missing required plugin attributes: {', '.join(missing)}")
-
-        # 2. Validate Standard Types
-        if not isinstance(self.name, str):
-            raise TypeError(f"'name' must be a string, got {type(self.name).__name__}")
-
-        if not isinstance(self.Config, type):
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        # Check if the subclass defined its own __init__
+        if "__init__" in cls.__dict__:
             raise TypeError(
-                f"'Config' must be a class (type), got {type(self.Config).__name__}"
+                f"Plugin '{cls.__name__}' is defining an __init__ method! "
+                f"Plugin authors must not use __init__. Use 'setup()' (sync or async) instead."
             )
+        cls._hooks: list[Hook] = []
+        for n, v in cls.__dict__.items():
+            if getattr(v, "_is_hook", False):
+                cls._hooks.append(Hook(n, v._condition, v))
 
-        if self.State is not None and not isinstance(self.State, type):
-            raise TypeError(
-                f"'State' must be a class (type) or None, got {type(self.State).__name__}"
-            )
+    def __init__(self, corecomms: CoreComms, loop: asyncio.AbstractEventLoop):
+        self._q_in = corecomms.q_in
+        self._q_out = corecomms.q_out
+        self._loop = loop
+        self._pending: dict[str, asyncio.Future] = {}
 
-        # 3. Validate Callables and their signatures
-        if self.create_state is not None:
-            self._validate_callable_signature(
-                "create_state", self.create_state, expected_params_count=0
-            )
+    def begin(self):
+        self._respt = self._loop.create_task(self._resp())
 
-        # activation and plugin_function both expect exactly 3 structural parameters (excluding self)
-        self._validate_callable_signature(
-            "activation", self.activation, expected_params_count=3
-        )
-        self._validate_callable_signature(
-            "plugin_function", self.plugin_function, expected_params_count=4
-        )
+    async def finish(self):
+        await self._respt.cancel()
 
-    def _validate_callable_signature(
-        self, attr_name: str, obj: Any, expected_params_count: int
-    ):
-        # Verify it is actually callable (handles functions, lambdas, methods, and __call__ objects)
-        if not callable(obj):
-            raise TypeError(
-                f"'{attr_name}' must be a callable object, got {type(obj).__name__}"
-            )
-
+    async def _resp(self):
         try:
-            signature = inspect.signature(obj)
-        except (ValueError, TypeError):
-            # Fallback for built-ins or edge cases where signature cannot be extracted
-            return
+            while True:
+                resp = await self._q_in.get()
+                if resp.id in self._pending:
+                    if resp.exc:
+                        self._pending[resp.id].set_exception(resp.exc)
+                    else:
+                        self._pending[resp.id].set_result(resp)
+        except asyncio.CancelledError:
+            pass
 
-        # Filter out 'self' or 'cls' parameters if it's a bound method or an object with __call__
-        params = list(signature.parameters.values())
+    async def run_in_process(self, func: Callable, *args, **kwargs) -> ConcExecResp:
+        fut = asyncio.Future()
+        id = random.randbytes(16)
+        self._pending[id] = fut
+        await self._q_out.put(ConcExecReq(False, func, args, kwargs, id))
+        return await fut
 
-        # If it's a regular method defined on a class that hasn't been bound yet
-        # (or an instance method being analyzed during __init__ execution)
-        if params and params[0].name in ("self", "cls"):
-            # If it's an explicitly bound method, inspect automatically strips 'self'.
-            # If it's passed as an unbound function from a subclass definition, 'self' is visible.
-            params = params[1:]
+    async def run_in_thread(self, func: Callable, *args, **kwargs) -> ConcExecResp:
+        fut = asyncio.Future()
+        id = random.randbytes(16)
+        self._pending[id] = fut
+        await self._q_out.put(ConcExecReq(True, func, args, kwargs, id))
+        return await fut
 
-        actual_count = len(params)
-        if actual_count != expected_params_count:
-            raise TypeError(
-                f"'{attr_name}' has an invalid signature. "
-                f"Expected {expected_params_count} parameters, but found {actual_count} "
-                f"({', '.join(p.name for p in params)})."
-            )
+    async def run_command_subprocess(self, *args) -> SubprocessResp:
+        fut = asyncio.Future()
+        id = random.randbytes(16)
+        self._pending[id] = fut
+        await self._q_out.put(SubprocessReq(args, id))
+        return await fut
+
+    # ONLY SUPPORTS CRUD ENDPOINTS. WS and etc may come at a later version
+    async def networkreqest(
+        self,
+        url: str,
+        req_type: ReqType,
+        params: dict[str, Any],
+        extra_headers: dict[str, Any],
+    ) -> NetworkResp:
+        fut = asyncio.Future()
+        id = random.randbytes(16)
+        self._pending[id] = fut
+        await self._q_out.put(NetworkReq(req_type, url, params, extra_headers, id))
+        return await fut
+
+    @abc.abstractmethod
+    def init(self, config: BasePluginConfig) -> None | Awaitable[None]: ...
+    @abc.abstractmethod
+    def deinit(self, config: BasePluginConfig) -> None | Awaitable[None]: ...
+
+
+@dataclass
+class BasePlugin:
+    name: str
+    config: Type[BasePluginConfig]
+    content: Type[BasePluginContent]
 
 
 @dataclass

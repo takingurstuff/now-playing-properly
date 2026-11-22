@@ -21,6 +21,9 @@ class MediaPlayer2PlayerInterface(
     DbusInterfaceCommonAsync,
     interface_name="org.mpris.MediaPlayer2.Player",
 ):
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+
     @dbus_method_async(
         flags=DbusUnprivilegedFlag,
         result_args_names=(),
@@ -234,6 +237,9 @@ class MediaPlayer2PlaylistsInterface(
     DbusInterfaceCommonAsync,
     interface_name="org.mpris.MediaPlayer2.Playlists",
 ):
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+
     @dbus_method_async(
         input_signature="o",
         flags=DbusUnprivilegedFlag,
@@ -301,10 +307,13 @@ class MediaPlayer2PlaylistsInterface(
         raise NotImplementedError
 
 
-class MediaPlayer2BaseInterface(
+class MediaPlayer2Interface(
     DbusInterfaceCommonAsync,
     interface_name="org.mpris.MediaPlayer2",
 ):
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+
     @dbus_method_async(
         flags=DbusUnprivilegedFlag,
         result_args_names=(),
@@ -391,6 +400,9 @@ class MediaPlayer2TracklistsInterface(
     DbusInterfaceCommonAsync,
     interface_name="org.mpris.MediaPlayer2.TrackList",
 ):
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+
     @dbus_method_async(
         input_signature="ao",
         result_signature="aa{sv}",

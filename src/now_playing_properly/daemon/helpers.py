@@ -1,6 +1,9 @@
 from typing import Any
 from functools import singledispatch
 from ..common.plugin_types import UnixFD
+from ..common.metadata_spec import PlayerProperties
+
+KEYS = ["Volume", "Shuffle", "LoopStatus", "MinimumRate", "MaximumRate", "Rate"]
 
 
 def traverse_plugin_data_dict(
@@ -104,6 +107,11 @@ def _(data: list | set) -> tuple[str, Any]:
     return "av", wrapped
 
 
+@wrap.register
+def _(data: UnixFD):
+    return "h", data.fd
+
+
 # We assume a flat dict here, if theres any nested dicts we will raise an error
 def tovariant(data_dict: dict[str, Any]):
     variant_packed_dict: dict[str, tuple[str, Any]] = {}
@@ -113,8 +121,40 @@ def tovariant(data_dict: dict[str, Any]):
 
 
 def prep_metadata(
-    metadata_dict: dict[str, Any], plugin_data_dict: dict[str, Any]
+    metadata_dict: dict[str, Any] | None = None,
+    plugin_data_dict: dict[str, Any] | None = None,
 ) -> dict[str, tuple[str, Any]]:
-    plugin_metadata_flattened = traverse_plugin_data_dict(plugin_data_dict)
+    metadata_dict = metadata_dict if metadata_dict else {}
+    plugin_metadata_flattened = (
+        traverse_plugin_data_dict(plugin_data_dict) if plugin_data_dict else {}
+    )
     metadata_dict.update(plugin_metadata_flattened)
     return tovariant(metadata_dict)
+
+
+# Tetoooooooooo
+def teto(pchanged_dict: dict[str]) -> PlayerProperties | None:
+    if any(k in pchanged_dict for k in KEYS):
+        return PlayerProperties(
+            volume=pchanged_dict.get("Volume"),
+            shuffle=pchanged_dict.get("Shuffle"),
+            loop_status=pchanged_dict.get("LoopStatus"),
+            minrate=pchanged_dict.get("MinimumRate"),
+            maxrate=pchanged_dict.get("MaximumRate"),
+            rate=pchanged_dict.get("Rate"),
+        )
+    return None
+
+
+# if __name__ == "__main__":
+#     import json
+
+#     print(
+#         json.dumps(
+#             prep_metadata(
+#                 {"a:b": "c"},
+#                 {"a": "b", "c": {"d": 123, "e": [1, "pingas"], "f": (1, 1, 1)}},
+#             ),
+#             indent=4,
+#         )
+#     )

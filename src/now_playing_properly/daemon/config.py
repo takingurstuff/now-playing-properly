@@ -9,10 +9,11 @@ from systemd.daemon import listen_fds, listen_fds_with_names, notify
 
 class GeneralSettings(BaseModel):
     debug_mode: bool
-    runtime_file_dir: DirectoryPath
-    cache_file_dir: DirectoryPath
+    runtime_dir: DirectoryPath
+    cache_dir: DirectoryPath
     plugins_dir: DirectoryPath
     plugin_conflict_resolv_strat: PluginConflictResolvStrat
+    player_name_blacklist: frozenset[str]
 
 
 class ResourceSettings(BaseModel):
@@ -25,7 +26,7 @@ class ResourceSettings(BaseModel):
 
 class DiscordSettings(BaseModel):
     enabled: bool = False
-    hide_paused: bool = True
+    hide_paused: bool = False
 
 
 class Config(BaseModel):

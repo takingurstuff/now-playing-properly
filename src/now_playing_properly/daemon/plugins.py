@@ -6,14 +6,14 @@ from typing import Optional, Type, Any
 from .log_manager import setup_logging
 from concurrent.futures import ThreadPoolExecutor
 from httpx import Client, AsyncClient, Request, Limits
-from .queue_types import UpdateEvent, PluginResponseEvent
 from ..common.resolv_strat import PluginConflictResolvStrat
+from ..common.communication_models import UpdateEvent, PluginResponseEvent
 from ..common.plugin_types import (
-    Plugin,
     Resources,
-    PluginState,
+    BasePlugin,
     BadDomainError,
     PluginResponse,
+    BasePluginState,
     BasePluginConfig,
 )
 from ..common.metadata_spec import AudioMetadata
@@ -24,7 +24,7 @@ logger = setup_logging()
 class PluginExecutor:
     def __init__(
         self,
-        plugins: list[Plugin],
+        plugins: list[BasePlugin],
         config: Config,
         task_queue: asyncio.Queue[UpdateEvent],
         response_queue: asyncio.Queue[PluginResponseEvent],
@@ -34,10 +34,11 @@ class PluginExecutor:
         self.task_queue = task_queue
         self.response_queuer = response_queue
         self.config_store: dict[str, Optional[BasePluginConfig]]
-        self.state_store: dict[str, Optional[PluginState]]
+        self.state_store: dict[str, Optional[BasePluginState]]
         self.loop = asyncio.get_running_loop()
 
     def _fill_plugin_stores(self):
+        logger.info
         for plugin in self.plugins:
             name = plugin.name
             config_model = plugin.Config
@@ -46,18 +47,23 @@ class PluginExecutor:
                 logger.warning(
                     f"Plugin {name} not configured in config file, skipping loading, this plugin will be ignored this session, please there is a section named [plugins.{name}] in your config file"
                 )
+                del self.config_store[name]
             try:
                 config = config_model.model_validate(self.config.plugins[name])
                 self.config_store[name] = config
             except Exception as e:
-                logger.exception(f"Configuration parsing failed for plugin {name}")
+                logger.exception(
+                    f"Configuration parsing failed for plugin {name}, this plugin will be disabled this session"
+                )
                 self.config_store[name] = None
 
             try:
                 state = state_creator()
                 self.state_store[name] = state
             except Exception as e:
-                logger.exception(f"State Initialization for plugin {name} failed")
+                logger.exception(
+                    f"State Initialization for plugin {name} failed, this plugin will be disabled this session"
+                )
                 self.state_store[name] = None
 
     async def __aenter__(self):
@@ -101,7 +107,7 @@ class PluginExecutor:
         self.thread_pool.shutdown()
 
     async def _exec_one_plugin(
-        self, plugin: Plugin, am: AudioMetadata
+        self, plugin: BasePlugin, am: AudioMetadata
     ) -> PluginResponse | None:
         state = self.config_store.get(plugin.name)
         config = self.config_store.get(plugin.name)
@@ -185,7 +191,7 @@ class PluginExecutor:
             final_am.lyrics = plugin_am.lyrics if plugin_am.lyrics else final_am.lyrics
             final_am.url = plugin_am.url if plugin_am.url else final_am.url
             final_am.album_artist.extend(
-                plugin_am.album_artist if plugin_am.album_artist else []
+                plugin_am.album_artist if am.album_artist else []
             )
             final_am.artist.extend(plugin_am.artist if plugin_am.artist else [])
             final_am.genre.extend(plugin_am.genre if plugin_am.genre else [])
